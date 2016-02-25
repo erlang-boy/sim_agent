@@ -15,6 +15,7 @@
 
 %% gen_fsm callbacks
 -export([init/1,
+         logout/2,
          logout/3,
          login/3,
          handle_event/3,
@@ -29,14 +30,17 @@
 %%% API
 %%% =================================================================
 -export([start_link/3]).
--export([agent_login/1, agent_logout/1]).
+-export([sync_agent_login/1, agent_login/1, agent_logout/1]).
 -export([start_agent/3, stop_agent/1]).
 
 %%% -----------------------------------------------------------------
 %%% agent_login/1
 %%% -----------------------------------------------------------------
-agent_login(Pid) ->
+sync_agent_login(Pid) ->
     gen_fsm:sync_send_event(Pid, login).
+
+agent_login(Pid)->
+    gen_fsm:send_event(Pid, login).
 
 agent_logout(Pid)->
     gen_fsm:sync_send_event(Pid, logout).
@@ -73,6 +77,13 @@ init([Company, AgentId, Config]) ->
     },
     agent_login(self()),
     {ok, logout, State}.
+
+%%% -----------------------------------------------------------------
+%%% logout/2
+%%% -----------------------------------------------------------------
+logout(login, State) ->
+    {NextS, State1} = login(State),
+    {next_state, NextS, State1}.
 
 %%% -----------------------------------------------------------------
 %%% logout/3

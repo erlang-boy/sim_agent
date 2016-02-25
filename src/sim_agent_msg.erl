@@ -20,10 +20,13 @@
 %%% -----------------------------------------------------------------
 %%% handle_msg/5
 %%% -----------------------------------------------------------------
+handle_msg(_Type, _From, _To, <<"ping">>, _State) ->
+     ok;
 handle_msg(Type, From, To, Data, State) ->
     print_msg(Type, From, To, Data),
     case ets:lookup(?MAP, To) of
-        []-> ?LOG("not supported mod:~p~n", [To]);
+        []->
+            ?LOG("not supported mod:~p~n", [To]);
         [#map_table{mod = Mod}] ->
             case catch dispatch_msg(Type, Mod, Data, State) of
                 ok -> ok;
@@ -49,8 +52,6 @@ dispatch_msg(Type, Mod, Data, State) ->
 %%% -----------------------------------------------------------------
 %%% print_msg/4
 %%% -----------------------------------------------------------------
-print_msg(_Type, _From, _To, <<"ping">>) ->
-    ok;
 print_msg(Type, From, To, Body) ->
     ?LOG("~n type: ~p"
          "~n from: ~p"

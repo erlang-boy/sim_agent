@@ -15,6 +15,7 @@
         sasl,
         runtime_tools,
         wx,
+        os_mon,
         public_key,
         observer,
         jiffy
