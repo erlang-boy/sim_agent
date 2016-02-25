@@ -1,0 +1,24 @@
+%%% =================================================================
+%%% @author Liu HuiDong
+%%% @date  16-2-24
+%%% @copyright huidong.liu@qingteng.me
+%%% @doc @todo Add description to sim_agent
+%%% =================================================================
+
+{application, sim_agent, [
+    {description, ""},
+    {vsn, "1"},
+    {registered, []},
+    {applications, [
+        kernel,
+        stdlib,
+        sasl,
+        runtime_tools,
+        wx,
+        public_key,
+        observer,
+        jiffy
+    ]},
+    {mod, {sim_agent_app, []}},
+    {env, []}
+]}.
