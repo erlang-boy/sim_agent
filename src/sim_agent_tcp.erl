@@ -8,6 +8,8 @@
 -module(sim_agent_tcp).
 -author("Liu HuiDong").
 -include("types.hrl").
+-include("sim_agent.hrl").
+
 %%% =================================================================
 %%% API functions
 %%% =================================================================
@@ -18,7 +20,7 @@
          recv_agent/1,
          send_packet/2,
          recv_packet/1,
-         handle_packet/3,
+         decode_content/2,
          async_recv/3,
          close_sock/1,
          connect/2]).
@@ -105,53 +107,15 @@ recv_packet(Sock) ->
     end.
 
 %%% -----------------------------------------------------------------
-%%% handle_packet/3
-%%% 获取packet长度
-%%% -----------------------------------------------------------------
-handle_packet(length, <<Length:32>>, State) ->
-    case (Length > 0 andalso Length =< ?MAX_PACKET_LEN) of
-        true ->
-            async_recv(Length, content, State);
-        %% 包长度出现问题
-        false ->
-            {error, sim_agent:on_logout(State)}
-    end;
-
-%%% -----------------------------------------------------------------
-%%% async_recv/3
-%%% 进行逻辑协议
-%%% -----------------------------------------------------------------
-handle_packet(content, Bin, State) ->
-    <<ContentLength:32, Header:12/binary, Body/binary>>
-    = sim_agent_crypto:decrypt(Bin),
-    case ContentLength == (byte_size(Header) + byte_size(Body)) of
-        %% 解码成功，这里仅仅对长度校验
-        true ->
-            <<Type:32, From:32, To:32>> = Header,
-            Body2 = case Body =:= <<"ping">> of
-                        true -> Body;
-                        false ->
-                            jiffy:decode(Body, [return_maps])
-                    end,
-            sim_agent_msg:handle_msg(Type, From, To, Body2, State),
-            async_recv(4, length, State);
-        %% 解码出现问题
-        false ->
-            sim_agent:on_logout(State),
-            {error, State#state{sock = undefined, heartbeat_ref = undefined}}
-    end.
-
-%%% -----------------------------------------------------------------
 %%% async_recv/3
 %%% -----------------------------------------------------------------
-async_recv(Len, Callback, State = #state{sock = Sock}) when is_port(Sock) ->
+async_recv(Len, Callback, Sock) when is_port(Sock) ->
     case prim_inet:async_recv(Sock, Len, -1) of
         {ok, Ref} ->
-            {ok, State#state{recv_ref = Ref, callback = Callback}};
-        Error ->
-            ?LOG("async recv: ~p~n", [Error]),
-            sim_agent:on_logout(State),
-            {error, State#state{sock = undefined, heartbeat_ref = undefined}}
+            {ok, Ref, Callback};
+        {error, Error} ->
+            ?DEBUG("async recv: ~p~n", [Error]),
+            {error, Error}
     end.
 
 %%% -----------------------------------------------------------------
@@ -185,6 +149,18 @@ pack(Data) ->
 pack(Type, From, To, Body) ->
     ContentLen = 12 + byte_size(Body),
     [<<ContentLen:32>>, <<Type:32>>, <<From:32>>, <<To:32>>, Body].
+
+%%% -----------------------------------------------------------------
+%%% decode_content/2
+%%% -----------------------------------------------------------------
+decode_content(Header, Body)->
+    <<Type:32, From:32, To:32>> = Header,
+    Body2 = case Body =:= <<"ping">> of
+                true -> Body;
+                false ->
+                    jiffy:decode(Body, [return_maps])
+            end,
+    {Type, From, To, Body2}.
 
 %%% -----------------------------------------------------------------
 %%% random_now/0

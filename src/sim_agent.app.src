@@ -5,21 +5,19 @@
 %%% @doc @todo Add description to sim_agent
 %%% =================================================================
 
-{application, sim_agent, [
-    {description, ""},
-    {vsn, "1"},
-    {registered, []},
-    {applications, [
-        kernel,
-        stdlib,
-        sasl,
-        runtime_tools,
-        wx,
-        os_mon,
-        public_key,
-        observer,
-        jiffy
-    ]},
-    {mod, {sim_agent_app, []}},
-    {env, []}
+{application, sim_agent,
+ [{description, "titan Benchmarking Suite"},
+  {vsn, git},
+  {modules, []},
+  {registered, [sim_agent_sup, sim_agent_config, sim_agent_stats]},
+  {applications, [kernel,
+                  stdlib,
+                  lager,
+                  inets,
+                   os_mon,inets,
+                  public_key,
+                    jiffy,
+                  sasl]},
+  {mod, {sim_agent_app, []}},
+  {env, []}
 ]}.

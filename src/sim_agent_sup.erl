@@ -1,68 +1,56 @@
 %%% =================================================================
 %%% @author Liu HuiDong
-%%% @date  16-2-24
+%%% @date  16-2-27
 %%% @copyright huidong.liu@qingteng.me
 %%% @doc @todo Add description to sim_agent_sup
 %%% =================================================================
 
 -module(sim_agent_sup).
--author("Liu HuiDong").
 
 -behaviour(supervisor).
 
--define(SERVER, ?MODULE).
-
-%%% ==================================================================
-%%%   API functions
-%%% ==================================================================
+%%% =================================================================
+%%% API functions
+%%% =================================================================
 -export([start_link/0]).
--export([start_child/3,stop_child/1]).
+-export([start_child/2, stop_child/1]).
 %% Supervisor callbacks
 -export([init/1]).
 
-%%% ------------------------------------------------------------------
-%%% @spec start_child(Company, AgentId, Config) ->
-%%%    {ok, Pid :: pid()} | ignore | {error, Reason :: term()}).
-%%% ------------------------------------------------------------------
-start_child(Company, AgentId, Config)->
-    supervisor:start_child(?SERVER, [Company, AgentId, Config]).
+-include("sim_agent.hrl").
 
-%%% ------------------------------------------------------------------
-%%% @spec stop_child/1
-%%% ------------------------------------------------------------------
-stop_child(Pid)->
-    supervisor:terminate_child(?SERVER, Pid).
+-define(CHILD(I, Type), {I, {I, start_link, []}, permanent, 5000, Type, [I]}).
+-define(CHILD(I, Type, Prop), {I, {I, start_link, []}, Prop, 5000, Type, [I]}).
 
-%%% ------------------------------------------------------------------
-%%% @spec(start_link() ->
-%%%    {ok, Pid :: pid()} | ignore | {error, Reason :: term()}).
-%%% ------------------------------------------------------------------
+%%% -----------------------------------------------------------------
+%%% Starts the supervisor
+%%% -----------------------------------------------------------------
 start_link() ->
-    supervisor:start_link({local, ?SERVER}, ?MODULE, []).
+    supervisor:start_link({local, ?MODULE}, ?MODULE, []).
 
-%%% ==================================================================
-%%% Supervisor callbacks
-%%% ==================================================================
+%%% -----------------------------------------------------------------
+%%% @spec start_child/2
+%%% -----------------------------------------------------------------
+start_child(Mod, Type)->
+    supervisor:start_child(?MODULE, ?CHILD(Mod, Type, temporary)).
 
-%%% ------------------------------------------------------------------
-%%% @spec(init(Args :: term()) ->
-%%%  {ok, {SupFlags :: {RestartStrategy :: supervisor:strategy(),
-%%%       MaxR :: non_neg_integer(), MaxT :: non_neg_integer()},
-%%%       [ChildSpec :: supervisor:child_spec()]}} |
-%%%                                         ignore | {error, Reason :: term()}).
-%%% ------------------------------------------------------------------
+%%% -----------------------------------------------------------------
+%%% @spec stop_child/1
+%%% -----------------------------------------------------------------
+stop_child(Mod) ->
+    supervisor:terminate_child(?MODULE, Mod),
+    supervisor:delete_child(?MODULE, Mod).
+
+%%% =================================================================
+%%% Internal functions
+%%% =================================================================
+
+%%% -----------------------------------------------------------------
+%%% init/1
+%%% -----------------------------------------------------------------
 init([]) ->
-    RestartStrategy = simple_one_for_one,
-    MaxRestarts = 0,
-    MaxSecondsBetweenRestarts = 1,
-
-    SupFlags = {RestartStrategy, MaxRestarts, MaxSecondsBetweenRestarts},
-
-    Restart = permanent,
-    Shutdown = 2000,
-    Type = worker,
-
-    AChild = {'sim_agent', {'sim_agent', start_link, []},
-              Restart, Shutdown, Type, ['sim_agent']},
-
-    {ok, {SupFlags, [AChild]}}.
+    {ok, {{one_for_one, 5, 10},
+        [?CHILD(sim_agent_config, worker),
+         ?CHILD(sim_agent_httpc, worker),
+         ?CHILD(sim_agent_stats, worker),
+         ?CHILD(sim_agent_group_sup, supervisor)]}}.

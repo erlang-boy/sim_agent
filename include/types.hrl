@@ -27,7 +27,6 @@
     company,
     agent_id,
     config,
-
     sock = undefined,
     recv_ref,
     callback,
@@ -42,10 +41,3 @@
 -define(RECONNECT_TIME, infinity).
 
 -define(COMPANY_LEN, 20).
-
--define(LOG_OK, 1).
--ifdef(LOG_OK).
--define(LOG(F, A), io:format(F, A)).
--else.
--define(LOG(F, A), ok).
--endif.

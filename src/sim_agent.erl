@@ -1,257 +1,189 @@
 %%% =================================================================
 %%% @author Liu HuiDong
-%%% @date  16-2-24
+%%% @date  16-2-27
 %%% @copyright huidong.liu@qingteng.me
 %%% @doc @todo Add description to sim_agent
 %%% =================================================================
 
 -module(sim_agent).
 -author("Liu HuiDong").
+-include("sim_agent.hrl").
 
--include("msg_type.hrl").
--include("types.hrl").
-
--behaviour(gen_fsm).
-
-%% gen_fsm callbacks
--export([init/1,
-         logout/2,
-         logout/3,
-         login/3,
-         handle_event/3,
-         handle_sync_event/4,
-         handle_info/3,
-         terminate/3,
-         code_change/4]).
-
--define(SERVER, ?MODULE).
-
+-define(Fmt, "~n=========================================================~n"
+             "~p         cpu  => ~.2f %~n"
+             "~p         memory => ~p ~n"
+             "~p         processes => ~p ~n"
+             "~p         filehandles => ~p ~n"
+             "~p         client_workers: ~p,  client_online: ~p~n"
+             "~p         sys_workers: ~p,  sys_online: ~p~n"
+             "~p         input: ~p,  output: ~p~n"
+             "=========================================================~n").
 %%% =================================================================
-%%% API
+%%% API functions
 %%% =================================================================
--export([start_link/3]).
--export([sync_agent_login/1, agent_login/1, agent_logout/1]).
--export([start_agent/3, stop_agent/1]).
+-export([start/0, start/1, stop/0]).
+-export([add/1, add/2, reduce/1]).
+-export([info/0]).
+-export([test_case/0]).
 
 %%% -----------------------------------------------------------------
-%%% agent_login/1
+%%% @spec start/0
 %%% -----------------------------------------------------------------
-sync_agent_login(Pid) ->
-    gen_fsm:sync_send_event(Pid, login).
-
-agent_login(Pid)->
-    gen_fsm:send_event(Pid, login).
-
-agent_logout(Pid)->
-    gen_fsm:sync_send_event(Pid, logout).
-%%% -----------------------------------------------------------------
-%%% start_agent/3
-%%% -----------------------------------------------------------------
-start_agent(Company, AgentId, Config) ->
-    sim_agent_sup:start_child(Company, AgentId, Config).
+start() ->
+    start("/home/lhd/workspace/sim_agent/conf/test.config").
 
 %%% -----------------------------------------------------------------
-%%% stop_agent/1
+%%% @spec start/1
 %%% -----------------------------------------------------------------
-stop_agent(Pid) ->
-    sim_agent_sup:stop_child(Pid).
+start(Config) ->
+    sim_agent_config:load([Config]),
+    case sim_agent_config:get(report_status, stop) of
+        stop ->
+            ok = sim_agent_stats:run(),
+            test_case(),
+            spawn(fun() ->
+                DurationMins = sim_agent_config:get(duration, 10),
+                wait_for_stop(DurationMins)
+                  end);
+        running ->
+            ?INFO("running",[]),
+            ok
+    end.
 
 %%% -----------------------------------------------------------------
-%%% start_link/3
+%%% @spec test_case/0
 %%% -----------------------------------------------------------------
-start_link(Company, AgentId, Config) ->
-    gen_fsm:start_link(?MODULE, [Company, AgentId, Config], []).
-
-%%% =================================================================
-%%% gen_fsm callbacks
-%%% =================================================================
-
-%%% -----------------------------------------------------------------
-%%% init/1
-%%% -----------------------------------------------------------------
-init([Company, AgentId, Config]) ->
-    State = #state{
-        company = Company,
-        agent_id = AgentId,
-        config = Config
-    },
-    agent_login(self()),
-    {ok, logout, State}.
+test_case() ->
+    case sim_agent_config:get(tweb, undefined) of
+        undefined -> ok;
+        {async, Interval, Action, Cmd, Data} ->
+            sim_agent_httpc:async_tweb(Action, Cmd, Data),
+            timer:apply_after(timer:seconds(Interval), ?MODULE, test_case, []);
+        {sync, Interval, Action, Cmd, Data} ->
+            Reply = sim_agent_httpc:sync_tweb(Action, Cmd, Data),
+            timer:apply_after(timer:seconds(Interval), ?MODULE, test_case, []),
+            Reply
+    end.
 
 %%% -----------------------------------------------------------------
-%%% logout/2
+%%% @spec info/1
 %%% -----------------------------------------------------------------
-logout(login, State) ->
-    {NextS, State1} = login(State),
-    {next_state, NextS, State1}.
+info() ->
+    Res = os:cmd("lsof -p" ++ os:getpid() ++ " | wc -l"),
+    Handles =
+    list_to_integer(string:strip(string:strip(Res, both), both, $\n)),
+    Cpu = cpu_sup:util(),
+    Mem = erlang:memory(total),
+    Processes = length(erlang:processes()),
+    {{input, Input}, {output, Output}} = erlang:statistics(io),
+    {Total, Active} = case (catch sim_agent_httpc:get_online_agent(<<"default">>)) of
+                          {'EXIT', {timeout, _}} -> {httptimeout, httptimeout};
+                          Other -> Other
+                      end,
+    {ClientWorkers, ClientOnline} = sim_agent_group_sup:get_workers(),
+    Time = sim_agent_misc_lib:local_time_format(),
+    Args = [Time, Cpu,
+            Time, to_str(Mem),
+            Time, Processes,
+            Time, Handles,
+            Time, ClientWorkers, ClientOnline,
+            Time, Total, Active,
+            Time, to_str(Input), to_str(Output)],
+    Args1 = io_lib:format(?Fmt, Args),
+    case sim_agent_config:get(debug, true) of
+        true -> file:write_file("./sys_data.log", Args1, [raw, append]);
+        false -> ?INFO(?Fmt, Args)
+    end.
 
 %%% -----------------------------------------------------------------
-%%% logout/3
+%%% @spec stop/0
 %%% -----------------------------------------------------------------
-logout(login, _From, State) ->
-    {NextS, State1} = login(State),
-    {reply, {ok, NextS}, NextS, State1}.
-
-login(logout, _From, State)->
-    on_logout(State),
-    {reply, {ok, logout}, logout, State#state{sock = undefined,
-                                               heartbeat_ref = undefined}}.
-%%% -----------------------------------------------------------------
-%%% handle_event/3
-%%% -----------------------------------------------------------------
-handle_event(_Event, StateName, State) ->
-    {next_state, StateName, State}.
+stop() ->
+    case sim_agent_config:get(report_status, stop) of
+        stop -> ok;
+        running ->
+            sim_agent_sup:stop_child(sim_agent_group_sup),
+            sim_agent_sup:start_child(sim_agent_group_sup, supervisor),
+            sim_agent_stats:stop()
+    end.
 
 %%% -----------------------------------------------------------------
-%%% handle_sync_event/4
+%%% @spec add/1
 %%% -----------------------------------------------------------------
-handle_sync_event(_Event, _From, StateName, State) ->
-    Reply = ok,
-    {reply, Reply, StateName, State}.
+add(WorkerNum) ->
+    case sim_agent_config:get(report_status, stop) of
+        stop ->
+            ?INFO("test is stoped", []),
+            ok;
+        running ->
+            sim_agent_group_sup:start_workers(WorkerNum)
+    end.
 
 %%% -----------------------------------------------------------------
-%%% handle_info/3
+%%% @spec add/2
 %%% -----------------------------------------------------------------
-handle_info({inet_async, Sock, Ref, {ok, Data}}, StateName, State = #state{
-    sock = Sock, recv_ref = Ref, callback = Callback}) ->
-    case sim_agent_tcp:handle_packet(Callback, Data, State) of
-        {ok, State1} ->
-            {next_state, StateName, State1};
-        {error, State1} ->
-            {next_state, logout, State1}
-    end;
-handle_info({inet_async, Sock, Ref, {error, _Reason}},
-            _StateName, State = #state{sock = Sock, recv_ref = Ref}) ->
-    on_logout(State),
-    {next_state, logout,  State#state{sock = undefined,
-                                      heartbeat_ref = undefined}};
-handle_info(heartbeat, StateName, State = #state{sock = Sock}) when is_port(Sock) ->
-    case catch sim_agent_tcp:send_packet(Sock, msg_library:msg(?C2S_HEARTBEAT)) of
-        ok ->
-            Config = State#state.config,
-            Ref = erlang:send_after(Config:config(heartbeat), self(), heartbeat),
-            {next_state, StateName, State#state{
-                heartbeat_ref = Ref
-            }};
-        _ ->
-            on_logout(State),
-            {next_state, logout,  State#state{sock = undefined,
-                                              heartbeat_ref = undefined}}
-    end;
-handle_info(_Info, StateName, State) ->
-    {next_state, StateName, State}.
+add(WorkerNum, Rate) ->
+    case sim_agent_config:get(report_status, stop) of
+        stop ->
+            ?INFO("test is stoped", []), ok;
+        running ->
+            sim_agent_config:set(rate, Rate),
+            sim_agent_group_sup:start_workers(WorkerNum)
+    end.
 
 %%% -----------------------------------------------------------------
-%%% terminate/3
+%%% @spec reduce/1
 %%% -----------------------------------------------------------------
-terminate(_Reason, _StateName, #state{agent_id = AgentId,
-                                      sock = undefined,
-                                      heartbeat_ref = undefined}) ->
-    ets:delete(?AGENT, AgentId),
-    ok;
-terminate(_Reason, _StateName, #state{agent_id = AgentId, sock = Sock} = State) ->
-    ets:delete(?AGENT, AgentId),
-    sim_agent_tcp:close_sock(Sock),
-    sim_agent_crypto:clear(),
-    cancel_heartbeat(State#state.heartbeat_ref),
-    ok.
-
-%%% -----------------------------------------------------------------
-%%% code_change/4
-%%% -----------------------------------------------------------------
-code_change(_OldVsn, StateName, State, _Extra) ->
-    {ok, StateName, State}.
-
+reduce(WorkerNum) ->
+    case sim_agent_config:get(report_status, stop) of
+        stop ->
+            ?INFO("test is stoped", []), ok;
+        running ->
+            sim_agent_group_sup:stop_workers(WorkerNum)
+    end.
 %%% =================================================================
 %%% Internal functions
 %%% =================================================================
 
 %%% -----------------------------------------------------------------
-%%% login/1
+%%% wait_for_stop/1
 %%% -----------------------------------------------------------------
-login(State) ->
-    Config = State#state.config,
-    {Ip, Port} = Config:config(host),
-    case sim_agent_tcp:connect(Ip, Port) of
-        {ok, Sock} ->
-            case catch login(Sock, State) of
-                {ok, State1} ->
-                    {login, State1};
-                Error ->
-                    ?LOG("login error: ~p~n", [Error]),
-                    on_logout(State),
-                    {logout, State#state{sock = undefined,
-                                         heartbeat_ref = undefined}}
-            end;
-        {error, Reason} ->
-            ?LOG("login failed: ~p~n", [Reason]),
-            on_logout(State),
-            {logout, State#state{sock = undefined, heartbeat_ref = undefined}}
-    end.
-
-%%% -----------------------------------------------------------------
-%%% login/2
-%%% -----------------------------------------------------------------
-login(Sock, State) ->
-    AgentId = handshake(Sock, State),
-    on_login(State#state{agent_id = AgentId, sock = Sock}).
-
-%%% -----------------------------------------------------------------
-%%% handshake/2
-%%% -----------------------------------------------------------------
-handshake(Sock, State) ->
-    Company = State#state.company,
-    DummyId = State#state.agent_id,
-    sim_agent_tcp:send_company(Sock, Company),
-    sim_agent_tcp:recv_company(Sock, Company),
-    login_shock(State#state.config),
-    sim_agent_tcp:send_agent(Sock, DummyId),
-    sim_agent_tcp:recv_agent(Sock).
-
-%%% -----------------------------------------------------------------
-%%% login_shock/1
-%%% -----------------------------------------------------------------
-login_shock(Config) ->
-    Shock = Config:config(login_shock),
-    case is_number(Shock) andalso Shock > 0 of
+wait_for_stop(DurationMins) ->
+    Duration = timer:minutes(DurationMins) + timer:seconds(1),
+    sim_agent_misc_lib:sleep(Duration),
+    case cpu_sup:util() > 80 of
         true ->
-            RandomShock = sim_agent_misc_lib:random(1000, Shock),
-            timer:sleep(RandomShock);
-        false -> ignore
+            sim_agent_sup:stop_child(sim_agent_group_sup),
+            sim_agent_sup:start_child(sim_agent_group_sup, supervisor),
+            sim_agent_stats:stop(),
+            make_png(),
+            ?CONSOLE("Test completed after ~p mins.\n", [DurationMins]);
+        false ->
+            make_png(),
+            wait_for_stop(DurationMins)
     end.
 
 %%% -----------------------------------------------------------------
-%%% on_login/1
+%%% make_png/1
 %%% -----------------------------------------------------------------
-on_login(State = #state{config = Config}) ->
-    ?LOG("time: ~p, login: ~p~n",
-         [sim_agent_misc_lib:unixtime(), State#state.agent_id]),
-    Agent = #agent{
-        id = State#state.agent_id,
-        pid = self(),
-        online = true},
-    ets:insert(?AGENT, Agent),
-%%% 心跳
-    Ref = erlang:send_after(Config:config(heartbeat), self(), heartbeat),
-    sim_agent_tcp:async_recv(4, length, State#state{heartbeat_ref = Ref}).
+make_png() ->
+    TestsDir = sim_agent_config:get(tests),
+    Pwd = filename:absname(TestsDir),
+    file:set_cwd(Pwd),
+    os:cmd("make results"),
+    Pwd1 = sim_agent_config:get(file_id),
+    file:set_cwd(Pwd1).
 
 %%% -----------------------------------------------------------------
-%%% on_logout/1
+%%% to_str/1
 %%% -----------------------------------------------------------------
-on_logout(State = #state{sock = Sock}) ->
-    ?LOG("logout: ~p~n", [State#state.agent_id]),
-    Agent = #agent{
-        id = State#state.agent_id,
-        pid = self(),
-        online = false
-    },
-    ets:insert(?AGENT, Agent),
-    sim_agent_tcp:close_sock(Sock),
-    sim_agent_crypto:clear(),
-    cancel_heartbeat(State#state.heartbeat_ref).
-
-%%% -----------------------------------------------------------------
-%%% cancel_heartbeat/1
-%%% -----------------------------------------------------------------
-cancel_heartbeat(Ref) when is_reference(Ref) -> erlang:cancel_timer(Ref);
-cancel_heartbeat(_) -> ok.
+to_str(B) ->
+    KB = B div 1024,
+    MB = KB div 1024,
+    GB = MB div 1024,
+    if
+        GB > 10 -> integer_to_list(GB) ++ " GB";
+        MB > 10 -> integer_to_list(MB) ++ " MB";
+        KB > 0 -> integer_to_list(KB) ++ " kB";
+        true -> integer_to_list(B) ++ " B"
+    end.

@@ -12,7 +12,7 @@
 -include("msg_type.hrl").
 
 msg(?C2S_HEARTBEAT) ->
-    {?C2S_HEARTBEAT, ?MOD_NETWORK, ?MOD_SERVER, #{<<"ts">> => sim_agent_misc_lib:unixtime()}};
+    {?C2S_HEARTBEAT, ?MOD_NETWORK, ?MOD_SERVER, #{<<"tc">> => sim_agent_misc_lib:unixtime()}};
 
 msg(?SH_ERROR_REPORT) ->
     {?SH_ERROR_REPORT, ?MOD_SERVER, ?MOD_SERVER, #{

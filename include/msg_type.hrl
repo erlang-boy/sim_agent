@@ -16,7 +16,6 @@
 %% 防火墙模块
 -define(MOD_FIREWALL,       16#09000000).
 
-
 %% 心跳
 -define(C2S_HEARTBEAT,      16#ffffffff).
 
